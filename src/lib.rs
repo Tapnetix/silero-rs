@@ -139,10 +139,15 @@ impl VadSession {
         if ![8000_usize, 16000].contains(&config.sample_rate) {
             bail!("Unsupported sample rate, use 8000 or 16000!");
         }
-        let model = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(4)?
-            .commit_from_memory(model_bytes)?;
+        // ort >= rc.11: builder methods return `Error<SessionBuilder>` (not Send/Sync), so
+        // funnel them through `ort::Error` before converting to anyhow.
+        let build = || -> std::result::Result<Session, ort::Error> {
+            Session::builder()?
+                .with_optimization_level(GraphOptimizationLevel::Level3)?
+                .with_intra_threads(4)?
+                .commit_from_memory(model_bytes)
+        };
+        let model = build()?;
         let h_tensor = Array3::<f32>::zeros((2, 1, 64));
         let c_tensor = Array3::<f32>::zeros((2, 1, 64));
         let sample_rate_tensor = Array1::from_vec(vec![config.sample_rate as i64]);

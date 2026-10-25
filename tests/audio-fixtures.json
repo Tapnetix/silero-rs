@@ -1,0 +1,44 @@
+{
+  "sourceRepository": "https://github.com/emotechlab/silero-rs",
+  "sourceRevision": "26a646003cd8532ae2dde424ccdab1b6cdf5d7b0",
+  "sourceLicense": "MIT",
+  "licenseFile": "../LICENSE",
+  "files": [
+    {
+      "name": "birds.wav",
+      "url": "https://media.githubusercontent.com/media/emotechlab/silero-rs/26a646003cd8532ae2dde424ccdab1b6cdf5d7b0/tests/audio/birds.wav",
+      "size": 1239118,
+      "sha256": "b5b97e7c3ddd8f08f7f3c914c09a62b7ee315e119cba06abf671326c1d96ba9c"
+    },
+    {
+      "name": "rooster.wav",
+      "url": "https://media.githubusercontent.com/media/emotechlab/silero-rs/26a646003cd8532ae2dde424ccdab1b6cdf5d7b0/tests/audio/rooster.wav",
+      "size": 265900,
+      "sha256": "290c4c1d2cdc774dfe6af34d3874b6f134284ac10bab5dbe2fbe628d2fcc2e4b"
+    },
+    {
+      "name": "sample_1.wav",
+      "url": "https://media.githubusercontent.com/media/emotechlab/silero-rs/26a646003cd8532ae2dde424ccdab1b6cdf5d7b0/tests/audio/sample_1.wav",
+      "size": 147200,
+      "sha256": "3ba6b72c9b739b15373120635d4b8b5950677af55d30dd355ed5f89fd0c36c2f"
+    },
+    {
+      "name": "sample_2.wav",
+      "url": "https://media.githubusercontent.com/media/emotechlab/silero-rs/26a646003cd8532ae2dde424ccdab1b6cdf5d7b0/tests/audio/sample_2.wav",
+      "size": 168098,
+      "sha256": "b1d3bdbf1d5b31a8c971c6606e98d6676d5692645992bafb7337b49afe846666"
+    },
+    {
+      "name": "sample_3.wav",
+      "url": "https://media.githubusercontent.com/media/emotechlab/silero-rs/26a646003cd8532ae2dde424ccdab1b6cdf5d7b0/tests/audio/sample_3.wav",
+      "size": 112928,
+      "sha256": "5d1a0cdeab30cfe6eed8eb00a8e773f0ed1245785767ac96db8d35b3813b00ac"
+    },
+    {
+      "name": "sample_4.wav",
+      "url": "https://media.githubusercontent.com/media/emotechlab/silero-rs/26a646003cd8532ae2dde424ccdab1b6cdf5d7b0/tests/audio/sample_4.wav",
+      "size": 270080,
+      "sha256": "0fe244840f3ba1175f4b3dfeb8cbefcb45613b406d56e75a7aebc98106b36cf0"
+    }
+  ]
+}
