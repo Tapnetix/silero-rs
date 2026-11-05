@@ -342,7 +342,7 @@ impl VadSession {
                                 speech_end_ms + self.config.post_speech_pad.as_millis() as usize;
 
                             self.cached_active_speech = self
-                                .get_speech(start_ms, Some(speech_end_with_pad_ms))
+                                .retained_speech(start_ms, Some(speech_end_with_pad_ms))
                                 .to_vec();
 
                             vad_change = Some(VadTransition::SpeechEnd {
@@ -353,12 +353,12 @@ impl VadSession {
 
                             // Need to delete the current speech samples from internal buffer to prevent OOM.
                             assert!(self.speech_start_ms.is_some());
-                            let speech_end_idx = self.unchecked_duration_to_index(
-                                Duration::from_millis(speech_end_ms as u64),
-                            );
-                            let to_delete_idx = 0..(speech_end_idx + 1);
-                            self.session_audio.drain(to_delete_idx);
-                            self.deleted_samples += speech_end_idx + 1;
+                            let delete_count = (speech_end_ms * (self.config.sample_rate / 1000)
+                                + 1)
+                            .saturating_sub(self.deleted_samples)
+                            .min(self.session_audio.len());
+                            self.session_audio.drain(..delete_count);
+                            self.deleted_samples += delete_count;
                             self.speech_start_ms = None;
                         }
                         self.state = VadState::Silence
@@ -386,6 +386,24 @@ impl VadSession {
             self.session_audio.drain(..last_index);
             self.deleted_samples += last_index;
         }
+    }
+
+    /// Drop samples before `keep_from_sample`, an index relative to the current
+    /// session buffer (not an absolute stream position). Zero and indices beyond
+    /// the buffer are no-ops. Passing the buffer length discards all processed
+    /// audio; any partial frame awaiting inference is always retained.
+    ///
+    /// Detector state, recurrent tensors, cached completed speech, and absolute
+    /// timestamps are unchanged. Current speech and subsequent `SpeechEnd` samples
+    /// contain only the retained portion. Repeated trims bound continuous-speech
+    /// storage without restarting detection. Capacity is reused for later frames.
+    pub fn trim_session_audio(&mut self, keep_from_sample: usize) {
+        if keep_from_sample > self.session_audio.len() {
+            return;
+        }
+        let count = keep_from_sample.min(self.processed_samples - self.deleted_samples);
+        self.session_audio.drain(..count);
+        self.deleted_samples += count;
     }
 
     /// This will remove audio in the buffer until a duration and panic if it exceeds the duration.
@@ -481,13 +499,26 @@ impl VadSession {
         }
     }
 
+    // Speech timestamps stay absolute when callers discard samples mid-utterance.
+    // Intersect that utterance with the retained buffer, at sample precision.
+    fn retained_speech(&self, start_ms: usize, end_ms: Option<usize>) -> &[f32] {
+        let index = |ms: usize| {
+            (ms * (self.config.sample_rate / 1000))
+                .saturating_sub(self.deleted_samples)
+                .min(self.session_audio.len())
+        };
+        let start = index(start_ms);
+        let end = end_ms.map(index).unwrap_or(self.session_audio.len());
+        &self.session_audio[start..end.max(start)]
+    }
+
     /// Gets a buffer of the most recent active speech frames from the time the speech started to the
     /// end of the speech. Parameters from `VadConfig` have already been applied here so this isn't
     /// derived from the raw VAD inferences but instead after padding and filtering operations have
     /// been applied.
     pub fn get_current_speech(&self) -> &[f32] {
         if let Some(speech_start) = self.speech_start_ms {
-            self.get_speech(speech_start, None)
+            self.retained_speech(speech_start, None)
         } else {
             &self.cached_active_speech
         }
@@ -1112,5 +1143,145 @@ mod tests {
         }
 
         speech_ends
+    }
+}
+
+#[cfg(test)]
+mod session {
+    mod tests {
+        use crate::*;
+
+        fn speaking_session() -> VadSession {
+            let mut session = VadSession::new(VadConfig::default()).unwrap();
+            session.session_audio = (0..960).map(|i| i as f32 / 960.0).collect();
+            session.processed_samples = 960;
+            session.state = VadState::Speech {
+                start_ms: 0,
+                redemption_passed: true,
+                speech_time: Duration::from_millis(60),
+            };
+            session.speech_start_ms = Some(0);
+            session
+        }
+
+        #[test]
+        fn trim_keeps_only_samples_after_cut() {
+            let mut session = speaking_session();
+            let expected = session.session_audio[481..].to_vec();
+            session.trim_session_audio(481);
+            assert_eq!(session.session_audio, expected);
+            assert_eq!(session.deleted_samples, 481);
+            assert_eq!(session.get_current_speech(), expected);
+            session.trim_session_audio(1);
+            assert_eq!(session.deleted_samples, 482);
+            assert_eq!(session.session_audio, expected[1..]);
+            assert_eq!(session.session_time(), Duration::from_millis(60));
+        }
+
+        #[test]
+        fn trim_to_zero_clears_session_audio() {
+            let mut session = speaking_session();
+            session.trim_session_audio(960);
+            assert!(session.session_audio.is_empty());
+            assert!(session.get_current_speech().is_empty());
+            assert_eq!(session.deleted_samples, 960);
+            session.trim_session_audio(0);
+            assert!(session.process(&[0.0; 480]).is_ok());
+        }
+
+        #[test]
+        fn trim_beyond_buffer_is_noop() {
+            let mut session = speaking_session();
+            let expected = session.session_audio.clone();
+            session.trim_session_audio(961);
+            session.trim_session_audio(usize::MAX);
+            session.trim_session_audio(0);
+            assert_eq!(session.session_audio, expected);
+            assert_eq!(session.deleted_samples, 0);
+            // A cut cannot discard a partial frame awaiting inference.
+            session.session_audio.extend_from_slice(&[0.0; 17]);
+            session.trim_session_audio(977);
+            assert_eq!(session.deleted_samples, 960);
+            assert_eq!(session.session_audio, vec![0.0; 17]);
+            session.process(&[0.0; 463]).unwrap();
+            assert_eq!(session.processed_samples, 1440);
+        }
+
+        #[test]
+        fn speech_end_after_trim_reports_remaining_samples_only() {
+            for cut in [481, 960] {
+                let mut session = speaking_session();
+                let expected = session.session_audio[cut..].to_vec();
+                session.trim_session_audio(cut);
+                let transitions = session.process(&[0.0; 16000]).unwrap();
+                let ends: Vec<_> = transitions
+                    .iter()
+                    .filter_map(|event| {
+                        if let VadTransition::SpeechEnd {
+                            start_timestamp_ms,
+                            end_timestamp_ms,
+                            samples,
+                        } = event
+                        {
+                            Some((*start_timestamp_ms, *end_timestamp_ms, samples))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(ends.len(), 1);
+                assert_eq!((ends[0].0, ends[0].1), (0, 60));
+                assert_eq!(*ends[0].2, expected);
+                assert_eq!(session.get_current_speech(), expected);
+                assert!(!session.is_speaking());
+            }
+        }
+
+        #[test]
+        fn trim_does_not_change_speech_state() {
+            let mut session = speaking_session();
+            session.silent_samples = 16;
+            session.cached_active_speech = vec![0.25];
+            let state = format!("{:?}", session.state);
+            let h = session.h_tensor.clone();
+            let c = session.c_tensor.clone();
+            session.trim_session_audio(481);
+            assert_eq!(format!("{:?}", session.state), state);
+            assert_eq!(session.h_tensor, h);
+            assert_eq!(session.c_tensor, c);
+            assert_eq!(session.speech_start_ms, Some(0));
+            assert_eq!(session.silent_samples, 16);
+            assert_eq!(session.processed_samples, 960);
+            assert_eq!(session.cached_active_speech, vec![0.25]);
+            assert!(session.is_speaking());
+        }
+
+        #[test]
+        fn memory_stays_bounded_over_ten_minutes_of_speech_with_periodic_trim() {
+            // Force deterministic continuous speech through the real inference/state path.
+            let config = VadConfig {
+                positive_speech_threshold: -1.0,
+                negative_speech_threshold: -1.0,
+                ..VadConfig::default()
+            };
+            let mut session = VadSession::new(config).unwrap();
+            let frame = [0.0; 480];
+            for i in 0..20_000 {
+                session.process(&frame).unwrap();
+                if (i + 1) % 100 == 0 {
+                    session.trim_session_audio(session.session_audio_samples());
+                }
+                assert!(session.session_audio_samples() <= 48_000);
+                assert!(session.session_audio.capacity() <= 65_536);
+                assert!(session.cached_active_speech.is_empty());
+                if i > 4 {
+                    assert!(session.is_speaking());
+                }
+            }
+            assert_eq!(session.session_time(), Duration::from_secs(600));
+            assert_eq!(session.processed_duration(), Duration::from_secs(600));
+            assert_eq!(session.deleted_samples, 9_600_000);
+            assert!(session.get_current_speech().is_empty());
+        }
     }
 }
