@@ -182,7 +182,7 @@ impl VadSession {
     pub fn validate_input(&self, audio_frame: &[f32]) -> Result<()> {
         if audio_frame
             .iter()
-            .all(|&sample| -1.0 <= sample && sample <= 1.0)
+            .all(|&sample| (-1.0..=1.0).contains(&sample))
         {
             Ok(())
         } else {
@@ -198,9 +198,7 @@ impl VadSession {
     /// 8000 or 16000Hz.
     pub fn process(&mut self, audio_frame: &[f32]) -> Result<Vec<VadTransition>> {
         #[cfg(debug_assertions)]
-        if let Err(e) = self.validate_input(audio_frame) {
-            return Err(e);
-        }
+        self.validate_input(audio_frame)?;
 
         #[cfg(feature = "audio_resampler")]
         let audio_frame = if ![8000, 16000].contains(&self.config.sample_rate) {

@@ -13,6 +13,8 @@
 //! the audio folder as well.
 //!
 //! Also, all test audios will be 16kHz to make it easy to test silero in both 16kHz and 8kHz modes.
+#![cfg(feature = "serde")]
+
 use approx::assert_ulps_eq;
 use hound::WavReader;
 use serde::{Deserialize, Serialize};
